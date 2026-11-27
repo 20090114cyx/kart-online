@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>手机横屏布局预览</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        overflow: hidden;
+        color: rgba(255, 255, 255, 0.4);
+        font: 12px system-ui, "Microsoft YaHei", sans-serif;
+        letter-spacing: 1px;
+      }
+      iframe {
+        /* 844×390：iPhone 12 横屏尺寸；窗口放不下时等比缩小，不会把 HUD 顶出屏幕 */
+        width: min(844px, 94vw);
+        height: auto;
+        aspect-ratio: 844 / 390;
+        border: 0;
+        border-radius: 14px;
+        box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+        background: #0b0e13;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe src="/?touch=1" title="手机横屏布局预览"></iframe>
+    <div>手机横屏布局预览 · 844 × 390</div>
+  </body>
+</html>

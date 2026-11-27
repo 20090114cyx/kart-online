@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kart Minimap Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070a0f;
+      --panel: rgba(255, 255, 255, 0.035);
+      --line: rgba(255, 255, 255, 0.09);
+      --text: #e8eef6;
+      --muted: #8ea1b5;
+      --accent: #5fe7ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(1100px 650px at 12% -8%, rgba(52, 99, 138, 0.32), transparent 60%),
+        radial-gradient(900px 600px at 100% 100%, rgba(42, 112, 83, 0.2), transparent 58%),
+        var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      padding: 34px 22px 64px;
+    }
+    .page { width: min(1120px, 100%); margin: 0 auto; }
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font: 600 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      font-weight: 700;
+    }
+    .lede {
+      max-width: 640px;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .grid {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 18px;
+      margin-top: 30px;
+    }
+    .card {
+      flex: 0 0 auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+    }
+    .card-large { flex: 0 1 542px; max-width: 100%; }
+    .card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 3px 12px;
+    }
+    .card-head h2 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #c7d4e2;
+    }
+    .size {
+      color: var(--muted);
+      font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: nowrap;
+    }
+    .stage {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      border-radius: 12px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(95, 231, 255, 0.12), transparent 34%),
+        radial-gradient(circle at 82% 84%, rgba(128, 155, 255, 0.16), transparent 40%),
+        repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 9px),
+        linear-gradient(155deg, #17222d 0%, #0c1219 62%, #0a0e14 100%);
+    }
+    canvas { display: block; }
+    .map-desktop { width: 180px; height: 140px; }
+    .map-mobile { width: 120px; height: 90px; }
+    .map-large { width: 480px; max-width: 100%; height: auto; aspect-ratio: 4 / 3; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px 26px;
+      margin-top: 26px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: #b7c5d4;
+      font-size: 12px;
+    }
+    .swatch { width: 20px; height: 4px; border-radius: 999px; background: #cfd8e3; }
+    .swatch.branch { background: #9fb3c8; height: 3px; }
+    .swatch.tunnel {
+      background: repeating-linear-gradient(90deg, #ffd166 0 4px, transparent 4px 7px);
+      height: 3px;
+    }
+    .swatch.start {
+      width: 11px;
+      height: 11px;
+      border-radius: 2px;
+      background: repeating-conic-gradient(#f2f6fb 0% 25%, #11161d 0% 50%) 0 0 / 5.5px 5.5px;
+    }
+    .swatch.boost {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #5fe7ff;
+      box-shadow: 0 0 9px rgba(95, 231, 255, 0.9);
+    }
+    .swatch.player {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #ffd166;
+      border: 2px solid #fff;
+    }
+    .swatch.ai {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #5aa9ff;
+      border: 1px solid rgba(6, 10, 16, 0.9);
+    }
+    .foot {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      margin: 18px 2px 0;
+      color: #718397;
+      font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    .foot b { color: #aebfd0; font-weight: 500; }
+    @media (max-width: 620px) {
+      body { padding: 24px 14px 48px; }
+      .grid { gap: 14px; }
+      .card { padding: 11px; }
+      .card-large { flex-basis: 100%; }
+      .stage { padding: 12px; }
+      .map-large { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">Kart / HUD</p>
+      <h1>小地图预览</h1>
+      <p class="lede">主环、支路、隧道段、起跑线和加速带。四个点分别沿主路与支路移动，用来目视检查投影、尺寸适配和 DPR。</p>
+    </header>
+
+    <section class="grid">
+      <article class="card">
+        <div class="card-head"><h2>桌面 HUD</h2><span class="size">180 × 140</span></div>
+        <div class="stage"><canvas id="map-desktop" class="map-desktop" aria-label="180×140 小地图"></canvas></div>
+      </article>
+
+      <article class="card">
+        <div class="card-head"><h2>手机横屏</h2><span class="size">120 × 90</span></div>
+        <div class="stage"><canvas id="map-mobile" class="map-mobile" aria-label="120×90 小地图"></canvas></div>
+      </article>
+
+      <article class="card card-large">
+        <div class="card-head"><h2>大图检查</h2><span class="size">480 × 360</span></div>
+        <div class="stage"><canvas id="map-large" class="map-large" aria-label="480×360 小地图"></canvas></div>
+      </article>
+    </section>
+
+    <section class="legend" aria-label="图例">
+      <span class="legend-item"><i class="swatch"></i>主环</span>
+      <span class="legend-item"><i class="swatch branch"></i>支路</span>
+      <span class="legend-item"><i class="swatch tunnel"></i>隧道</span>
+      <span class="legend-item"><i class="swatch start"></i>起跑线</span>
+      <span class="legend-item"><i class="swatch boost"></i>加速带</span>
+      <span class="legend-item"><i class="swatch player"></i>玩家</span>
+      <span class="legend-item"><i class="swatch ai"></i>AI</span>
+    </section>
+
+    <p class="foot">
+      <span>DPR <b id="dpr">–</b></span>
+      <span>背景 <b>rgba(10,14,20,0.55)</b></span>
+      <span>布局只投影一次，每帧只 blit 背景 + 画点</span>
+    </p>
+  </main>
+
+  <script type="module" src="/scripts/minimap-preview.mjs"></script>
+</body>
+</html>
