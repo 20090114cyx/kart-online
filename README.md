@@ -29,6 +29,19 @@ npm.cmd run dev      # Vite，监听 5173，并把 /ws 代理到 8787
 
 > 注意用 `npm.cmd` 而不是 `npm`——你机器的 PowerShell 执行策略挡住了 `npm.ps1`。
 
+### 公网联机（跨网络用这个，已部署）
+
+线上地址：<https://kart-online.onrender.com/>
+
+网页和房间 WebSocket 由同一个 Node 服务提供（同一端口、同一域名，客户端按 `location.host` 自动连 `/ws`），所以对方**只要打开网址**就能进房间，不需要装任何东西、也不需要和你同一个网络。
+
+- 源码：<https://github.com/20090114cyx/kart-online>，Render 免费档按仓库根目录的 `render.yaml` 自动构建部署
+- 本地跑同样的生产模式：`npm.cmd run build` 然后 `npm.cmd start`（默认 8787，可用 `PORT` 覆盖）
+- 静态文件服务带路径穿越防护，`/healthz` 可做健康检查 / 保活
+- Render 免费档 15 分钟没人访问会休眠，**首次打开要等 30~60 秒**唤醒，之后秒开
+- 推送到 GitHub 的 `main` 分支会自动触发重新部署（约 2~3 分钟）
+- 也可以直接用 `Dockerfile` 部署到任意支持容器的平台（Zeabur / Koyeb / 自己的服务器）
+
 ---
 
 ## 操作
