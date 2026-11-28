@@ -3,7 +3,7 @@ services:
     name: kart-online
     runtime: node
     plan: free
-    region: frankfurt
+    region: singapore
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
