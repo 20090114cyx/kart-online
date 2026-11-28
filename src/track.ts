@@ -14,7 +14,7 @@ const ROAD_Y = 0.02;
 const START_LINE_Y = 0.03;
 const RAIL_HEIGHT = 1.1;
 const RAIL_SIDE_OFFSET = 0.7;
-const TEXTURE_SIZE = 512;
+const TEXTURE_SIZE = 1024;
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
@@ -294,28 +294,115 @@ export class Track {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Unable to create 2D context for asphalt texture');
 
+    // 横向 1024px 对应约 24 米路宽，纵向按 9 米平铺
+    const cx = size / 2;
+    const railW = 26; // 红白路肩宽度
+    const edgeLineW = 8; // 路肩内侧白实线
+    const railRed = `#${theme.railRed.toString(16).padStart(6, '0')}`;
+    const railWhite = `#${theme.railWhite.toString(16).padStart(6, '0')}`;
+
+    // 1. 底色
     ctx.fillStyle = theme.asphalt;
     ctx.fillRect(0, 0, size, size);
 
-    for (let i = 0; i < 20000; i++) {
+    // 2. 轮胎磨损带：左右车道各一条，横向柔边渐变
+    const wearLanes = [size * 0.293, size * 0.707]; // ≈300 / ≈724
+    for (const wx of wearLanes) {
+      const half = 60; // 总宽约 120px
+      const tone = Math.random() < 0.5 ? '255,255,255' : '0,0,0';
+      const grad = ctx.createLinearGradient(wx - half, 0, wx + half, 0);
+      const alpha = 0.05 + Math.random() * 0.06;
+      grad.addColorStop(0, `rgba(${tone},0)`);
+      grad.addColorStop(0.5, `rgba(${tone},${alpha.toFixed(3)})`);
+      grad.addColorStop(1, `rgba(${tone},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(wx - half, 0, half * 2, size);
+
+      // 更窄更深的轮胎黑印
+      const markHalf = 18; // 宽约 36px
+      const markGrad = ctx.createLinearGradient(wx - markHalf, 0, wx + markHalf, 0);
+      markGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      markGrad.addColorStop(0.5, 'rgba(0,0,0,0.1)');
+      markGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = markGrad;
+      ctx.fillRect(wx - markHalf, 0, markHalf * 2, size);
+    }
+
+    // 3. 沥青颗粒：细噪点 + 碎石
+    for (let i = 0; i < 26000; i++) {
       const x = Math.random() * size;
       const y = Math.random() * size;
-      const light = Math.random() < 0.5;
-      const v = light ? 255 : 0;
-      const alpha = 0.03 + Math.random() * 0.09;
-      ctx.fillStyle = `rgba(${v}, ${v}, ${v}, ${alpha.toFixed(3)})`;
-      ctx.fillRect(x, y, 1, 1);
+      const v = Math.random() < 0.5 ? 255 : 0;
+      const alpha = 0.02 + Math.random() * 0.1;
+      const s = 1 + Math.random(); // 1~2px
+      ctx.fillStyle = `rgba(${v},${v},${v},${alpha.toFixed(3)})`;
+      ctx.fillRect(x, y, s, s);
+    }
+    for (let i = 0; i < 5000; i++) {
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      const rx = 0.5 + Math.random() * 1.5;
+      const ry = 0.5 + Math.random() * 1.5;
+      const v = Math.random() < 0.5 ? 235 : 12;
+      const alpha = 0.05 + Math.random() * 0.1;
+      ctx.fillStyle = `rgba(${v},${v},${v},${alpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // 中央虚线：60 像素亮 / 60 像素暗
+    // 4. 深色补丁 + 细裂缝
+    const patchCount = 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < patchCount; i++) {
+      const w = 80 + Math.random() * 140;
+      const h = 40 + Math.random() * 80;
+      const x = railW + 60 + Math.random() * (size - (railW + 60) * 2 - w);
+      const y = Math.random() * (size - h);
+      ctx.save();
+      ctx.translate(x + w / 2, y + h / 2);
+      ctx.rotate((Math.random() - 0.5) * 0.16);
+      ctx.fillStyle = `rgba(12,12,14,${(0.06 + Math.random() * 0.06).toFixed(3)})`;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
+
+    const crackCount = 8 + Math.floor(Math.random() * 7);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < crackCount; i++) {
+      let x = railW + 40 + Math.random() * (size - (railW + 40) * 2);
+      let y = Math.random() * size;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      const segs = 3 + Math.floor(Math.random() * 4);
+      for (let s = 0; s < segs; s++) {
+        x += (Math.random() - 0.5) * 46;
+        y += 10 + Math.random() * 26;
+        ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = `rgba(8,8,10,${(0.15 + Math.random() * 0.15).toFixed(3)})`;
+      ctx.lineWidth = 1 + Math.random();
+      ctx.stroke();
+    }
+
+    // 5. 红白路肩：贴最外侧 26px，每块高约 52px（20 块保证纵向无缝）
+    const blocks = 20;
+    const blockH = size / blocks;
+    for (let i = 0; i < blocks; i++) {
+      ctx.fillStyle = i % 2 === 0 ? railRed : railWhite;
+      ctx.fillRect(0, i * blockH, railW, blockH + 1);
+      ctx.fillRect(size - railW, i * blockH, railW, blockH + 1);
+    }
+    // 路肩内侧白实线
+    ctx.fillStyle = theme.asphaltEdge;
+    ctx.fillRect(railW, 0, edgeLineW, size);
+    ctx.fillRect(size - railW - edgeLineW, 0, edgeLineW, size);
+
+    // 6. 中央虚线：64 亮 / 64 空（约原 60 节奏，8 段铺满 1024 保证无缝）
     ctx.fillStyle = theme.asphaltLine;
-    for (let y = 0; y < size; y += 120) {
-      ctx.fillRect(256 - 3.5, y, 7, 60);
+    const dashCycle = size / 8;
+    for (let y = 0; y < size; y += dashCycle) {
+      ctx.fillRect(cx - 3.5, y, 7, dashCycle / 2);
     }
-
-    // 两侧实线
-    ctx.fillRect(14 - 3, 0, 6, size);
-    ctx.fillRect(498 - 3, 0, 6, size);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -359,7 +446,7 @@ export class Track {
         dist += Math.hypot(p.x - prev.x, p.z - prev.z);
       }
 
-      const v = dist / 12;
+      const v = dist / 9;
       const uo = i * 4;
       uvs[uo] = 0;
       uvs[uo + 1] = v;
@@ -385,7 +472,7 @@ export class Track {
 
     const material = new THREE.MeshStandardMaterial({
       map,
-      roughness: 0.92,
+      roughness: 0.88,
       metalness: 0,
       side: THREE.DoubleSide,
     });
@@ -494,11 +581,13 @@ export class Track {
       positions[o + 4] = y;
       positions[o + 5] = p.z + nz * hw;
 
-      const v = (j / len) * 2.2;
+      // 横向按 2.6 m 一格铺纹理。以前 u 只到 3，一格宽 8 m，
+      // 从车里看就是几块巨大的黄色色块，完全看不出是箭头。
+      const v = (j / len) * 3.0;
       const uo = j * 4;
       uvs[uo] = 0;
       uvs[uo + 1] = v;
-      uvs[uo + 2] = 3;
+      uvs[uo + 2] = Math.max(4, (hw * 2) / 2.6);
       uvs[uo + 3] = v;
     }
 
