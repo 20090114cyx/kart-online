@@ -2128,11 +2128,13 @@ function update(dt: number): void {
     if (p1) {
       p1.x = r.kart.pos.x;
       p1.z = r.kart.pos.z;
+      p1.heading = r.kart.heading;
     }
     const p2 = minimapPlayers2[i];
     if (p2) {
       p2.x = r.kart.pos.x;
       p2.z = r.kart.pos.z;
+      p2.heading = r.kart.heading;
     }
   }
   minimap1?.update(minimapPlayers1);

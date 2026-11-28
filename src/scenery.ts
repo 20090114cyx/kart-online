@@ -259,7 +259,8 @@ export function createScenery(scene: THREE.Scene, track: Track): Scenery {
   // ---------------------------------------------------------------------------
   // Sky dome
   // ---------------------------------------------------------------------------
-  const skyGeometry = new THREE.SphereGeometry(2200, 32, 16);
+  const skyGeometry = new THREE.SphereGeometry(2200, 96, 64);
+  const sunDirection = SUN_OFFSET.clone().normalize();
   const skyMaterial = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
@@ -267,6 +268,11 @@ export function createScenery(scene: THREE.Scene, track: Track): Scenery {
     uniforms: {
       horizonColor: { value: new THREE.Color(theme.skyHorizon) },
       zenithColor: { value: new THREE.Color(theme.skyZenith) },
+      sunColor: { value: new THREE.Color(theme.sunColor) },
+      sunDirection: { value: sunDirection },
+      uTime: { value: 0 },
+      // 沙漠是晴空，云要少很多；森林多云
+      cloudAmount: { value: theme.scenery === 'desert' ? 0.42 : 1.0 },
     },
     vertexShader: /* glsl */ `
       varying vec3 vWorldPosition;
@@ -280,12 +286,73 @@ export function createScenery(scene: THREE.Scene, track: Track): Scenery {
     fragmentShader: /* glsl */ `
       uniform vec3 horizonColor;
       uniform vec3 zenithColor;
+      uniform vec3 sunColor;
+      uniform vec3 sunDirection;
+      uniform float uTime;
+      uniform float cloudAmount;
       varying vec3 vWorldPosition;
 
+      // 便宜的 value noise + fbm，用来画云。纯程序化，不需要贴图。
+      float hash21(vec2 p) {
+        p = fract(p * vec2(127.31, 311.7));
+        p += dot(p, p + 34.23);
+        return fract(p.x * p.y);
+      }
+      float valueNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+          mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+          v += a * valueNoise(p);
+          p = p * 2.03 + 11.3;
+          a *= 0.5;
+        }
+        return v;
+      }
+
       void main() {
-        float h = normalize(vWorldPosition).y;
+        vec3 dir = normalize(vWorldPosition);
+        float h = dir.y;
         float t = pow(clamp(h * 0.5 + 0.5, 0.0, 1.0), 0.8);
-        gl_FragColor = vec4(mix(horizonColor, zenithColor, t), 1.0);
+        vec3 col = mix(horizonColor, zenithColor, t);
+
+        // 太阳：一个硬核心 + 三层衰减光晕，代替原来空荡荡的天空
+        float sd = max(dot(dir, normalize(sunDirection)), 0.0);
+        float disc = smoothstep(0.99955, 0.99985, sd);
+        float glow = pow(sd, 1400.0) * 0.9 + pow(sd, 40.0) * 0.22 + pow(sd, 6.0) * 0.10;
+        col += sunColor * (disc * 0.85 + glow);
+
+        // 云：把方向投到一层水平面上做 fbm，越靠近地平线越稀
+        float above = smoothstep(0.02, 0.34, h);
+        if (above > 0.001) {
+          // 用 dir.xz / (h + 常量) 而不是 /h：纯平面投影在天顶会炸成放射状条纹
+          vec2 p = dir.xz / (h + 0.42) * 0.85;
+          p += vec2(uTime * 0.006, uTime * 0.0025);
+          float n = fbm(p * 1.15);
+          // cloudAmount 越小，阈值越高 → 云越少（沙漠几乎晴空）
+          float lo = mix(0.72, 0.56, cloudAmount);
+          float hi = mix(0.92, 0.82, cloudAmount);
+          float cover = smoothstep(lo, hi, n);
+          float lit = fbm(p * 2.2 + 5.7);
+          vec3 cloudCol = mix(vec3(0.82, 0.86, 0.93), vec3(1.0, 0.99, 0.97), smoothstep(0.35, 0.85, lit));
+          // 太阳附近的云被照亮一点
+          cloudCol += sunColor * pow(sd, 8.0) * 0.25;
+          col = mix(col, cloudCol, cover * above * 0.9 * cloudAmount);
+        }
+
+        // 地平线霾：让地面和天空接得柔和，别出现一条硬边
+        col = mix(col, horizonColor, smoothstep(0.09, -0.03, h) * 0.85);
+
+        gl_FragColor = vec4(col, 1.0);
       }
     `,
   });
@@ -723,6 +790,8 @@ export function createScenery(scene: THREE.Scene, track: Track): Scenery {
     sun.position.copy(kartPos).add(SUN_OFFSET);
     sun.target.position.copy(kartPos);
     sun.target.updateMatrixWorld();
+    // 云缓慢飘移：用真实时间，不依赖外部 dt
+    skyMaterial.uniforms.uTime!.value = performance.now() * 0.001;
   };
 
   const dispose = (): void => {

@@ -740,21 +740,72 @@ export class Track {
     const red = new THREE.Color(this.theme.railRed);
     const white = new THREE.Color(this.theme.railWhite);
 
+    // 横带做成 0.07 m 厚的薄盒子，从侧面看才有体积，不再是纸片。
+    const HALF_THICK = 0.035;
+    // 上下两条横带的离地高度区间（中间留缝，像金属护栏）。
+    const LOWER_BOTTOM = 0.16;
+    const LOWER_TOP = 0.52;
+    const UPPER_BOTTOM = 0.66;
+    const UPPER_TOP = RAIL_HEIGHT;
+    // 顶部细方管，盖住上横带的缝口。
+    const TOP_TUBE_HALF = 0.03;
+
     const positions: number[] = [];
     const colors: number[] = [];
     const indices: number[] = [];
     let vert = 0;
 
+    const quad = (a: number, b: number, c: number, d: number): void => {
+      indices.push(a, b, c, b, d, c);
+    };
+
+    // 沿路径把一段横带挤成薄盒子：前后各 4 个角点，段内生成 4 个侧面。
+    const pushBand = (
+      ix: number,
+      iz: number,
+      iy: number,
+      jx: number,
+      jz: number,
+      jy: number,
+      nx: number,
+      nz: number,
+      y0: number,
+      y1: number,
+      c: THREE.Color,
+    ): void => {
+      const base = vert;
+      const ox = nx * HALF_THICK;
+      const oz = nz * HALF_THICK;
+      positions.push(
+        ix - ox, iy + y0, iz - oz,
+        ix + ox, iy + y0, iz + oz,
+        ix + ox, iy + y1, iz + oz,
+        ix - ox, iy + y1, iz - oz,
+        jx - ox, jy + y0, jz - oz,
+        jx + ox, jy + y0, jz + oz,
+        jx + ox, jy + y1, jz + oz,
+        jx - ox, jy + y1, jz - oz,
+      );
+      for (let k = 0; k < 8; k++) colors.push(c.r, c.g, c.b);
+      // 外侧面 / 内侧面 / 底面 / 顶面（双面材质兜底，绕序不影响可见性）。
+      quad(base, base + 4, base + 3, base + 7);
+      quad(base + 1, base + 5, base + 2, base + 6);
+      quad(base, base + 1, base + 4, base + 5);
+      quad(base + 3, base + 2, base + 7, base + 6);
+      vert += 8;
+    };
+
+    // 缺口判断抽成函数，主带、顶杆、立柱共用同一套条件，岔路口不会被挡住。
+    const skipSeg: boolean[] = new Array(segs).fill(false);
     for (let i = 0; i < segs; i++) {
       const tMid = (i + 0.5) / segs;
-      let skip = false;
       for (const [a, b] of gaps) {
         if (tMid >= a && tMid <= b) {
-          skip = true;
+          skipSeg[i] = true;
           break;
         }
       }
-      if (skip) continue;
+      if (skipSeg[i]) continue;
 
       const j = (i + 1) % n;
       const pi = path.points[i]!;
@@ -773,6 +824,7 @@ export class Track {
         const mx = (ix + jx) * 0.5;
         const mz = (iz + jz) * 0.5;
         if (this.main.distanceToCenterline(mx, mz) <= this.halfWidth + 0.6) {
+          skipSeg[i] = true;
           continue;
         }
       }
@@ -780,22 +832,54 @@ export class Track {
       if (checkBranchClearance) {
         const mx = (ix + jx) * 0.5;
         const mz = (iz + jz) * 0.5;
-        if (this.nearBranchArea(mx, mz, 1.4, path)) continue;
+        if (this.nearBranchArea(mx, mz, 1.4, path)) skipSeg[i] = true;
       }
+    }
+
+    const dark = new THREE.Color(this.theme.railWhite);
+    const hsl = { h: 0, s: 0, l: 0 };
+    dark.getHSL(hsl);
+    dark.setHSL(hsl.h, hsl.s, hsl.l * 0.45);
+
+    for (let i = 0; i < segs; i++) {
+      if (skipSeg[i]) continue;
+
+      const j = (i + 1) % n;
+      const pi = path.points[i]!;
+      const pj = path.points[j]!;
+      const ti = path.tangents[i]!;
+      const tj = path.tangents[j]!;
+      const hwi = (path.halfWidths[i] ?? this.halfWidth) + RAIL_SIDE_OFFSET;
+      const hwj = (path.halfWidths[j] ?? this.halfWidth) + RAIL_SIDE_OFFSET;
+
+      const ix = pi.x - ti.z * hwi * side;
+      const iz = pi.z + ti.x * hwi * side;
+      const jx = pj.x - tj.z * hwj * side;
+      const jz = pj.z + tj.x * hwj * side;
+
+      // 取两端切线的平均法线，弯道处厚度方向不会突然扭一下。
+      let nx = -(ti.z + tj.z) * 0.5 * side;
+      let nz = (ti.x + tj.x) * 0.5 * side;
+      const nl = Math.hypot(nx, nz) || 1;
+      nx /= nl;
+      nz /= nl;
 
       const c = Math.floor(i / 8) % 2 === 0 ? red : white;
-      positions.push(
-        ix, pi.y, iz,
-        ix, pi.y + RAIL_HEIGHT, iz,
-        jx, pj.y, jz,
-        jx, pj.y + RAIL_HEIGHT, jz,
+      pushBand(ix, iz, pi.y, jx, jz, pj.y, nx, nz, LOWER_BOTTOM, LOWER_TOP, c);
+      pushBand(ix, iz, pi.y, jx, jz, pj.y, nx, nz, UPPER_BOTTOM, UPPER_TOP, c);
+      pushBand(
+        ix,
+        iz,
+        pi.y,
+        jx,
+        jz,
+        pj.y,
+        nx,
+        nz,
+        UPPER_TOP - TOP_TUBE_HALF,
+        UPPER_TOP + TOP_TUBE_HALF,
+        dark,
       );
-      for (let k = 0; k < 4; k++) colors.push(c.r, c.g, c.b);
-      indices.push(
-        vert, vert + 2, vert + 1,
-        vert + 1, vert + 2, vert + 3,
-      );
-      vert += 4;
     }
 
     if (vert === 0) return;
@@ -808,8 +892,8 @@ export class Track {
 
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.85,
-      metalness: 0,
+      roughness: 0.7,
+      metalness: 0.2,
       side: THREE.DoubleSide,
     });
 
@@ -821,16 +905,106 @@ export class Track {
     this.geometries.push(geometry);
     this.materials.push(material);
     this.group.add(mesh);
+
+    // 立柱：按累计弧长每 4 m 一根，而不是按采样点个数（不同路径采样间距不同）。
+    const POST_SPACING = 4;
+    const postMatrices: THREE.Matrix4[] = [];
+    const up = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const one = new THREE.Vector3(1, 1, 1);
+    let cum = 0;
+    let lastPost = 0;
+
+    const postBlocked = (idx: number): boolean => {
+      const s = Math.min(idx, segs - 1);
+      if (skipSeg[s]) return true;
+      const prev = s > 0 ? s - 1 : closed ? segs - 1 : -1;
+      return prev >= 0 && skipSeg[prev]!;
+    };
+
+    for (let i = 0; i < n; i++) {
+      if (i > 0) {
+        const a = path.points[i - 1]!;
+        const b = path.points[i]!;
+        cum += Math.hypot(b.x - a.x, b.z - a.z);
+      }
+      if (i === 0) {
+        lastPost = 0;
+      } else if (cum - lastPost < POST_SPACING) {
+        continue;
+      }
+      if (postBlocked(i)) continue;
+
+      const p = path.points[i]!;
+      const tan = path.tangents[i]!;
+      const hw = (path.halfWidths[i] ?? this.halfWidth) + RAIL_SIDE_OFFSET;
+      pos.set(p.x - tan.z * hw * side, p.y + (RAIL_HEIGHT + 0.06) / 2, p.z + tan.x * hw * side);
+      quat.setFromAxisAngle(up, Math.atan2(tan.x, tan.z));
+      postMatrices.push(new THREE.Matrix4().compose(pos, quat, one));
+      lastPost = cum;
+    }
+
+    if (postMatrices.length > 0) {
+      const postGeo = new THREE.BoxGeometry(0.12, RAIL_HEIGHT + 0.06, 0.12);
+      const postMat = new THREE.MeshStandardMaterial({
+        color: dark,
+        metalness: 0.25,
+        roughness: 0.6,
+      });
+      const posts = new THREE.InstancedMesh(postGeo, postMat, postMatrices.length);
+      posts.name = `GuardrailPosts${label}${side < 0 ? 'Left' : 'Right'}`;
+      for (let i = 0; i < postMatrices.length; i++) {
+        posts.setMatrixAt(i, postMatrices[i]!);
+      }
+      posts.instanceMatrix.needsUpdate = true;
+      posts.castShadow = true;
+      posts.receiveShadow = true;
+      this.geometries.push(postGeo);
+      this.materials.push(postMat);
+      this.group.add(posts);
+    }
   }
 
   private buildStartLine(): void {
+    const n = this.main.count;
     const p = this.main.points[0]!;
     const tan = this.main.tangents[0]!;
     const nx = -tan.z;
     const nz = tan.x;
-    const hw = this.halfWidth;
+    // 用起点采样点的半宽，让棋盘格铺满整条路
+    const hw = this.main.halfWidthAt(0);
+    const roadWidth = hw * 2;
     const ht = 1.25;
 
+    // ---- 棋盘格外围 0.15 m 白色细边（垫在下面，露出四周）----
+    const borderHw = hw + 0.15;
+    const borderHt = ht + 0.15;
+    const borderY = p.y + START_LINE_Y - 0.004;
+    const borderPositions = new Float32Array([
+      p.x - nx * borderHw - tan.x * borderHt, borderY, p.z - nz * borderHw - tan.z * borderHt,
+      p.x + nx * borderHw - tan.x * borderHt, borderY, p.z + nz * borderHw - tan.z * borderHt,
+      p.x + nx * borderHw + tan.x * borderHt, borderY, p.z + nz * borderHw + tan.z * borderHt,
+      p.x - nx * borderHw + tan.x * borderHt, borderY, p.z - nz * borderHw + tan.z * borderHt,
+    ]);
+    const borderGeo = new THREE.BufferGeometry();
+    borderGeo.setAttribute('position', new THREE.BufferAttribute(borderPositions, 3));
+    borderGeo.setIndex([0, 1, 2, 0, 2, 3]);
+
+    const borderMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.geometries.push(borderGeo);
+    this.materials.push(borderMat);
+
+    const borderMesh = new THREE.Mesh(borderGeo, borderMat);
+    borderMesh.name = 'StartLineBorder';
+    borderMesh.renderOrder = 1;
+    this.group.add(borderMesh);
+
+    // ---- 黑白棋盘格，深度 2.5 m ----
     const ax = p.x - nx * hw - tan.x * ht;
     const az = p.z - nz * hw - tan.z * ht;
     const bx = p.x + nx * hw - tan.x * ht;
@@ -841,10 +1015,10 @@ export class Track {
     const dz = p.z - nz * hw + tan.z * ht;
 
     const positions = new Float32Array([
-      ax, p.y + START_LINE_Y, az,
-      bx, p.y + START_LINE_Y, bz,
-      cx, p.y + START_LINE_Y, cz,
-      dx, p.y + START_LINE_Y, dz,
+      ax, p.y + START_LINE_Y + 0.004, az,
+      bx, p.y + START_LINE_Y + 0.004, bz,
+      cx, p.y + START_LINE_Y + 0.004, cz,
+      dx, p.y + START_LINE_Y + 0.004, dz,
     ]);
 
     const geometry = new THREE.BufferGeometry();
@@ -853,8 +1027,8 @@ export class Track {
     geometry.setIndex([0, 1, 2, 0, 2, 3]);
 
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 32;
+    canvas.width = 512;
+    canvas.height = 64;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       const cols = 16;
@@ -881,11 +1055,216 @@ export class Track {
 
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = 'StartLine';
-    mesh.renderOrder = 1;
+    mesh.renderOrder = 2;
 
     this.geometries.push(geometry);
     this.materials.push(material);
     this.group.add(mesh);
+
+    // ---- 发车格：2×2 排布，贴在起跑线后方 6 m / 12 m ----
+    const gridCanvas = document.createElement('canvas');
+    gridCanvas.width = 256;
+    gridCanvas.height = 336;
+    const gctx = gridCanvas.getContext('2d');
+    if (gctx) {
+      gctx.clearRect(0, 0, 256, 336);
+      gctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      gctx.lineWidth = 12;
+      gctx.strokeRect(9, 9, 238, 318);
+      // 框内箭头指向赛道前进方向（画布上方）
+      gctx.fillStyle = 'rgba(255,255,255,0.55)';
+      gctx.beginPath();
+      gctx.moveTo(128, 92);
+      gctx.lineTo(84, 150);
+      gctx.lineTo(110, 150);
+      gctx.lineTo(110, 246);
+      gctx.lineTo(146, 246);
+      gctx.lineTo(146, 150);
+      gctx.lineTo(172, 150);
+      gctx.closePath();
+      gctx.fill();
+    }
+    const gridTex = new THREE.CanvasTexture(gridCanvas);
+    gridTex.colorSpace = THREE.SRGBColorSpace;
+    gridTex.anisotropy = 8;
+    this.textures.push(gridTex);
+
+    const gridMat = new THREE.MeshBasicMaterial({
+      map: gridTex,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    this.materials.push(gridMat);
+
+    const gridPositions: number[] = [];
+    const gridUvs: number[] = [];
+    const gridIndices: number[] = [];
+    const halfW = 1.3;
+    const halfL = 1.7;
+    for (const back of [6, 12]) {
+      // 闭合赛道从起点往后退会绕到 t≈1，必须取模；开放赛道则夹在端点内
+      const raw = -Math.round(back / this.main.spacing);
+      const idx = this.main.closed
+        ? ((raw % n) + n) % n
+        : Math.max(0, Math.min(n - 1, raw));
+      const gp = this.main.points[idx]!;
+      const gt = this.main.tangents[idx]!;
+      const ghw = this.main.halfWidthAt(idx);
+      const gnx = -gt.z;
+      const gnz = gt.x;
+      const lat = ghw * 0.45;
+      for (const side of [-1, 1] as const) {
+        const gx = gp.x + gnx * lat * side;
+        const gz = gp.z + gnz * lat * side;
+        const gy = gp.y + 0.035;
+        const rx = gx - gt.x * halfL;
+        const rz = gz - gt.z * halfL;
+        const fx = gx + gt.x * halfL;
+        const fz = gz + gt.z * halfL;
+        const base = gridPositions.length / 3;
+        gridPositions.push(
+          rx - gnx * halfW, gy, rz - gnz * halfW,
+          rx + gnx * halfW, gy, rz + gnz * halfW,
+          fx + gnx * halfW, gy, fz + gnz * halfW,
+          fx - gnx * halfW, gy, fz - gnz * halfW,
+        );
+        gridUvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+        gridIndices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      }
+    }
+
+    const gridGeo = new THREE.BufferGeometry();
+    gridGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gridPositions), 3));
+    gridGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(gridUvs), 2));
+    gridGeo.setIndex(gridIndices);
+
+    const gridMesh = new THREE.Mesh(gridGeo, gridMat);
+    gridMesh.name = 'StartGrid';
+    gridMesh.renderOrder = 1;
+    this.geometries.push(gridGeo);
+    this.group.add(gridMesh);
+
+    // ---- 门架：两根立柱 + 横梁 + START 横幅 + 5 个发车灯 ----
+    const gate = new THREE.Group();
+    gate.name = 'StartGate';
+    gate.position.copy(p);
+    gate.rotation.y = Math.atan2(tan.x, tan.z);
+
+    const metal = new THREE.MeshStandardMaterial({
+      color: 0x3a3d42,
+      metalness: 0.4,
+      roughness: 0.5,
+    });
+    this.materials.push(metal);
+
+    const postGeo = new THREE.BoxGeometry(0.45, 7.2, 0.45);
+    this.geometries.push(postGeo);
+    for (const side of [-1, 1] as const) {
+      const post = new THREE.Mesh(postGeo, metal);
+      post.position.set(side * (hw + 0.35), 3.6, 0);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      gate.add(post);
+    }
+
+    const beamGeo = new THREE.BoxGeometry(roadWidth + 1.2, 0.9, 0.5);
+    this.geometries.push(beamGeo);
+    const beam = new THREE.Mesh(beamGeo, metal);
+    beam.position.set(0, 7.2 - 0.45, 0);
+    beam.castShadow = true;
+    gate.add(beam);
+
+    // START 横幅：深色底 + 上下红白格纹边
+    const bannerCanvas = document.createElement('canvas');
+    bannerCanvas.width = 1024;
+    bannerCanvas.height = 128;
+    const bctx = bannerCanvas.getContext('2d');
+    if (bctx) {
+      bctx.fillStyle = '#121418';
+      bctx.fillRect(0, 0, 1024, 128);
+      for (let x = 0; x < 1024; x += 16) {
+        const odd = (x / 16) % 2 === 0;
+        bctx.fillStyle = odd ? '#e8323c' : '#f5f5f5';
+        bctx.fillRect(x, 0, 16, 16);
+        bctx.fillStyle = odd ? '#f5f5f5' : '#e8323c';
+        bctx.fillRect(x, 112, 16, 16);
+      }
+      bctx.strokeStyle = 'rgba(255,255,255,0.65)';
+      bctx.lineWidth = 3;
+      bctx.strokeRect(1.5, 1.5, 1021, 125);
+      bctx.fillStyle = '#ffffff';
+      bctx.font = 'bold 78px "Arial Black", Impact, system-ui, sans-serif';
+      bctx.textAlign = 'center';
+      bctx.textBaseline = 'middle';
+      bctx.shadowColor = '#ff3a3a';
+      bctx.shadowBlur = 14;
+      bctx.fillText('START', 512, 66);
+      bctx.shadowBlur = 0;
+    }
+    const bannerTex = new THREE.CanvasTexture(bannerCanvas);
+    bannerTex.colorSpace = THREE.SRGBColorSpace;
+    bannerTex.anisotropy = 8;
+    this.textures.push(bannerTex);
+
+    const bannerGeo = new THREE.PlaneGeometry(roadWidth * 0.8, 1.5);
+    this.geometries.push(bannerGeo);
+    const bannerMat = new THREE.MeshStandardMaterial({
+      map: bannerTex,
+      emissive: 0xffffff,
+      emissiveMap: bannerTex,
+      emissiveIntensity: 0.15,
+      roughness: 0.6,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+    });
+    this.materials.push(bannerMat);
+    const banner = new THREE.Mesh(bannerGeo, bannerMat);
+    // 贴在横梁朝向赛道来车方向的一面（-切线）
+    banner.position.set(0, 7.2 - 0.45, -0.26);
+    banner.rotation.y = Math.PI;
+    gate.add(banner);
+
+    // 5 个发车灯：灯罩圆面朝向来车，前面一片暗红发光片
+    const lampY = 7.2 - 0.45 - 0.55;
+    const lampZ = -0.36;
+    const shadeGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.18, 10);
+    shadeGeo.rotateX(Math.PI / 2);
+    this.geometries.push(shadeGeo);
+    const shadeMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1c20,
+      metalness: 0.5,
+      roughness: 0.45,
+    });
+    this.materials.push(shadeMat);
+
+    const lensGeo = new THREE.CircleGeometry(0.2, 12);
+    this.geometries.push(lensGeo);
+    const lensMat = new THREE.MeshStandardMaterial({
+      color: 0x4a1010,
+      emissive: 0xff2222,
+      emissiveIntensity: 0.35,
+      roughness: 0.3,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    this.materials.push(lensMat);
+
+    for (let i = 0; i < 5; i++) {
+      const lx = -roadWidth * 0.3 + (roadWidth * 0.6 * i) / 4;
+      const shade = new THREE.Mesh(shadeGeo, shadeMat);
+      shade.position.set(lx, lampY, lampZ);
+      gate.add(shade);
+      const lens = new THREE.Mesh(lensGeo, lensMat);
+      lens.position.set(lx, lampY, lampZ - 0.092);
+      lens.rotation.y = Math.PI;
+      gate.add(lens);
+    }
+
+    this.group.add(gate);
   }
 
   // ---------------------------------------------------------------------------
