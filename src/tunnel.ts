@@ -21,7 +21,12 @@ const OUTER_SCALE_X = 1.55;
 const OUTER_SCALE_Y = 1.9;
 const OUTER_Y_OFFSET = -1.6;
 const OUTER_HALF_WIDTH = INNER_HALF_WIDTH * OUTER_SCALE_X;
-const OUTER_TOP = INNER_HEIGHT * OUTER_SCALE_Y + OUTER_Y_OFFSET;
+
+/**
+ * 外壳墙脚落到的世界高度。地面平面在 y = -0.03，
+ * 这里再埋深一点，保证上坡路段的洞口不会悬在半空（之前就悬了 3 米）。
+ */
+const SKIRT_Y = -0.9;
 
 /** 内壁横截面：[横向偏移, 高度]（从左侧墙脚开始，绕过拱顶到右侧墙脚） */
 const INNER_RING: Array<[number, number]> = [
@@ -210,7 +215,9 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
       innerPos[vi + 1] = p.y + iy;
       innerPos[vi + 2] = p.z + rz * ix;
       outerPos[vi] = p.x + rx * ox;
-      outerPos[vi + 1] = p.y + oy;
+      // 墙脚（内圈最下两个点）必须一直落到地面以下，否则路面抬高时外壳会悬空
+      const foot = k === 0 || k === INNER_RING.length - 1;
+      outerPos[vi + 1] = foot ? Math.min(p.y + oy, SKIRT_Y) : p.y + oy;
       outerPos[vi + 2] = p.z + rz * ox;
     }
   }
@@ -221,6 +228,16 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
       const o = (r * INNER_RING.length + k) * 2;
       uv[o] = k / (INNER_RING.length - 1);
       uv[o + 1] = (r * path.spacing) / 8;
+    }
+  }
+
+  // 外壳比内壁大一圈，共用一套 UV 会被拉成木纹；单独给它一套按面积铺的 UV
+  const outerUv = new Float32Array(rings * INNER_RING.length * 2);
+  for (let r = 0; r < rings; r++) {
+    for (let k = 0; k < INNER_RING.length; k++) {
+      const o = (r * INNER_RING.length + k) * 2;
+      outerUv[o] = k * 1.1;
+      outerUv[o + 1] = (r * path.spacing) / 9;
     }
   }
 
@@ -268,7 +285,7 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
 
   const outerGeo = new THREE.BufferGeometry();
   outerGeo.setAttribute('position', new THREE.BufferAttribute(outerPos, 3));
-  outerGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  outerGeo.setAttribute('uv', new THREE.BufferAttribute(outerUv, 2));
   outerGeo.setIndex(indices);
   outerGeo.computeVertexNormals();
   const outerMesh = new THREE.Mesh(outerGeo, outerMat);
@@ -278,59 +295,116 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
   group.add(outerMesh);
   innerGeos.push(outerGeo);
 
-  // ---------------- 洞门（内壁到外壁的环形面） ----------------
+  // ---------------- 洞门 ----------------
+  // 岩壁立面 + 洞口一圈凸出的黄黑门套。以前整面都是黄黑条纹，面积大得离谱。
   const hazard = hazardTexture();
   textures.push(hazard);
-  const portalMat = new THREE.MeshStandardMaterial({
+  const portalBandMat = new THREE.MeshStandardMaterial({
     map: hazard,
     roughness: 0.8,
     metalness: 0,
     side: THREE.DoubleSide,
   });
-  materials.push(portalMat);
+  materials.push(portalBandMat);
 
-  const portalPos: number[] = [];
-  const portalUv: number[] = [];
-  const portalIdx: number[] = [];
-  let pv = 0;
-  for (const r of [0, rings - 1]) {
-    for (let k = 0; k < INNER_RING.length - 1; k++) {
-      const iA = (r * INNER_RING.length + k) * 3;
-      const iB = (r * INNER_RING.length + k + 1) * 3;
-      // 内圈
-      const ix0 = innerPos[iA]!;
-      const iy0 = innerPos[iA + 1]!;
-      const iz0 = innerPos[iA + 2]!;
-      const ix1 = innerPos[iB]!;
-      const iy1 = innerPos[iB + 1]!;
-      const iz1 = innerPos[iB + 2]!;
-      // 外圈
-      const ox0 = outerPos[iA]!;
-      const oy0 = outerPos[iA + 1]!;
-      const oz0 = outerPos[iA + 2]!;
-      const ox1 = outerPos[iB]!;
-      const oy1 = outerPos[iB + 1]!;
-      const oz1 = outerPos[iB + 2]!;
+  const portalRockMat = new THREE.MeshStandardMaterial({
+    map: rock,
+    color: 0xd8d2c4,
+    // 洞口朝背光面，纯靠环境光会黑成一片；用纹理本身做一点自发光把暗部提起来
+    emissive: 0xffffff,
+    emissiveMap: rock,
+    emissiveIntensity: 0.45,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  materials.push(portalRockMat);
 
-      portalPos.push(ix0, iy0, iz0, ix1, iy1, iz1, ox1, oy1, oz1, ox0, oy0, oz0);
-      const u0 = k / (INNER_RING.length - 1);
-      const u1 = (k + 1) / (INNER_RING.length - 1);
-      portalUv.push(u0, 0, u1, 0, u1, 1, u0, 1);
-      portalIdx.push(pv, pv + 1, pv + 2, pv, pv + 2, pv + 3);
-      pv += 4;
+  /** 在「内圈 → 外圈」之间取一条环形带（t0..t1 为插值比例），两个洞口各一条 */
+  const buildPortalBand = (
+    t0: number,
+    t1: number,
+    mat: THREE.Material,
+    name: string,
+    uScale: number,
+  ): void => {
+    const pos: number[] = [];
+    const uvs: number[] = [];
+    const idx: number[] = [];
+    let pv = 0;
+    const mix = (i3: number, t: number): [number, number, number] => [
+      innerPos[i3]! + (outerPos[i3]! - innerPos[i3]!) * t,
+      innerPos[i3 + 1]! + (outerPos[i3 + 1]! - innerPos[i3 + 1]!) * t,
+      innerPos[i3 + 2]! + (outerPos[i3 + 2]! - innerPos[i3 + 2]!) * t,
+    ];
+    for (const r of [0, rings - 1]) {
+      for (let k = 0; k < INNER_RING.length - 1; k++) {
+        const a = (r * INNER_RING.length + k) * 3;
+        const b = a + 3;
+        pos.push(...mix(a, t0), ...mix(b, t0), ...mix(b, t1), ...mix(a, t1));
+        const u0 = k * uScale;
+        const u1 = (k + 1) * uScale;
+        uvs.push(u0, 0, u1, 0, u1, 1, u0, 1);
+        idx.push(pv, pv + 1, pv + 2, pv, pv + 2, pv + 3);
+        pv += 4;
+      }
     }
-  }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = name;
+    mesh.castShadow = true;
+    group.add(mesh);
+    innerGeos.push(geo);
+  };
 
-  const portalGeo = new THREE.BufferGeometry();
-  portalGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(portalPos), 3));
-  portalGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(portalUv), 2));
-  portalGeo.setIndex(portalIdx);
-  portalGeo.computeVertexNormals();
-  const portalMesh = new THREE.Mesh(portalGeo, portalMat);
-  portalMesh.name = 'TunnelPortals';
-  portalMesh.castShadow = true;
-  group.add(portalMesh);
-  innerGeos.push(portalGeo);
+  buildPortalBand(0, 1, portalRockMat, 'TunnelPortalRock', 2.4);
+
+  /** 洞口外沿的「门套」：沿路方向凸出 1.5 m，让洞口有厚度和阴影 */
+  const buildPortalCollar = (): void => {
+    const depth = 1.5;
+    const pos: number[] = [];
+    const uvs: number[] = [];
+    const idx: number[] = [];
+    let pv = 0;
+    for (const end of [0, rings - 1] as const) {
+      const outSign = end === 0 ? -1 : 1;
+      const tan = path.tangents[i0 + end]!;
+      const ox = tan.x * depth * outSign;
+      const oz = tan.z * depth * outSign;
+      for (let k = 0; k < INNER_RING.length - 1; k++) {
+        const a = (end * INNER_RING.length + k) * 3;
+        const b = a + 3;
+        const ax = innerPos[a]!;
+        const ay = innerPos[a + 1]!;
+        const az = innerPos[a + 2]!;
+        const bx = innerPos[b]!;
+        const by = innerPos[b + 1]!;
+        const bz = innerPos[b + 2]!;
+        pos.push(ax, ay, az, bx, by, bz, bx + ox, by, bz + oz, ax + ox, ay, az + oz);
+        const u0 = k * 2.0;
+        const u1 = (k + 1) * 2.0;
+        uvs.push(u0, 0, u1, 0, u1, 1, u0, 1);
+        idx.push(pv, pv + 1, pv + 2, pv, pv + 2, pv + 3);
+        pv += 4;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, portalBandMat);
+    mesh.name = 'TunnelPortalCollar';
+    mesh.castShadow = true;
+    group.add(mesh);
+    innerGeos.push(geo);
+  };
+
+  buildPortalCollar();
 
   // ---------------- 洞内路肩 ----------------
   const shoulderMat = new THREE.MeshStandardMaterial({
@@ -380,6 +454,46 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
   shoulderMesh.receiveShadow = true;
   group.add(shoulderMesh);
   innerGeos.push(shoulderGeo);
+
+  // ---------------- 墙脚污渍带 ----------------
+  // 内壁最下面 0.9 m 压一条深色，视觉上把墙和路面「焊」在一起，不会显得墙是浮着的。
+  const skirtMat = new THREE.MeshStandardMaterial({
+    color: 0x3b3b36,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  materials.push(skirtMat);
+  const skirtPos: number[] = [];
+  const skirtIdx: number[] = [];
+  for (const side of [-1, 1] as const) {
+    const base = skirtPos.length / 3;
+    for (let r = 0; r < rings; r++) {
+      const i = i0 + r;
+      const p = path.points[i]!;
+      const tan = path.tangents[i]!;
+      const rx = -tan.z;
+      const rz = tan.x;
+      const off = (INNER_HALF_WIDTH - 0.06) * side;
+      skirtPos.push(
+        p.x + rx * off, p.y + 0.02, p.z + rz * off,
+        p.x + rx * off, p.y + 0.9, p.z + rz * off,
+      );
+    }
+    for (let r = 0; r < rings - 1; r++) {
+      const a = base + r * 2;
+      skirtIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  const skirtGeo = new THREE.BufferGeometry();
+  skirtGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(skirtPos), 3));
+  skirtGeo.setIndex(skirtIdx);
+  skirtGeo.computeVertexNormals();
+  const skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
+  skirtMesh.name = 'TunnelSkirt';
+  skirtMesh.receiveShadow = true;
+  group.add(skirtMesh);
+  innerGeos.push(skirtGeo);
 
   // ---------------- 灯带 ----------------
   const lightMat = new THREE.MeshBasicMaterial({
@@ -477,27 +591,34 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
   innerGeos.push(rockGeo);
   const moundMat = new THREE.MeshStandardMaterial({
     map: rock,
-    color: 0x8a8a78,
+    color: 0x9a9684,
+    emissive: 0xffffff,
+    emissiveMap: rock,
+    emissiveIntensity: 0.3,
     roughness: 1,
     metalness: 0,
   });
   materials.push(moundMat);
 
-  // 两侧山脚：贴着外壁，半径小，只负责把隧道外壳和地面接起来
-  const sideCount = 14;
-  for (let k = 0; k < sideCount; k++) {
-    const u = 0.03 + (k / (sideCount - 1)) * 0.94;
+  // 两侧山脚：两排乱石，全部埋进地面，把外壳墙脚和地面接起来。
+  // 之前只有一排、而且高度跟着路面走，上坡段整排石头都悬在空中。
+  const sideCount = 16;
+  for (let k = 0; k < sideCount * 2; k++) {
+    const side = k % 2 === 0 ? -1 : 1;
+    const row = k < sideCount ? 0 : 1;
+    const slot = k % sideCount;
+    const u = 0.02 + (slot / (sideCount - 1)) * 0.96;
     const r = Math.round(u * (rings - 1));
     const p = path.points[i0 + r]!;
     const tan = path.tangents[i0 + r]!;
     const rx = -tan.z;
     const rz = tan.x;
-    const side = k % 2 === 0 ? -1 : 1;
-    const radius = 4.6 + (k % 4) * 1.3;
-    const off = side * (OUTER_HALF_WIDTH + 1.2 + (k % 3) * 1.8);
+    const radius = 3.4 + ((k * 7) % 5) * 0.85 + row * 1.2;
+    const off = side * (OUTER_HALF_WIDTH + 0.8 + row * 3.2 + ((k * 3) % 4) * 0.7);
     const mesh = new THREE.Mesh(rockGeo, moundMat);
     mesh.name = `TunnelRock${k}`;
-    mesh.position.set(p.x + rx * off, p.y + radius * 0.28, p.z + rz * off);
+    // 以地面为基准，底面沉进去一半，路面再高也不会悬空
+    mesh.position.set(p.x + rx * off, SKIRT_Y + radius * 0.62 * 0.45, p.z + rz * off);
     mesh.scale.set(radius, radius * 0.62, radius * 1.1);
     // 只绕 y 轴转。之前绕 x/z 转会把长轴甩进隧道里，像一块巨石悬在半空。
     mesh.rotation.set(0, k * 1.7, 0);
@@ -506,22 +627,66 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
     group.add(mesh);
   }
 
-  // 洞顶山脊：压扁的巨石，底面必须高于内顶
+  // 洞口两侧的岩石露头：压住洞口立面和洞壁的接缝，也让洞口有层次
+  for (const end of [0, rings - 1] as const) {
+    const i = i0 + end;
+    const p = path.points[i]!;
+    const tan = path.tangents[i]!;
+    const rx = -tan.z;
+    const rz = tan.x;
+    const outSign = end === 0 ? -1 : 1;
+    for (const side of [-1, 1] as const) {
+      for (let b = 0; b < 2; b++) {
+        const radius = 3.2 + b * 1.3;
+        const off = side * (18.6 + b * 2.6);
+        const ahead = 0.6 + b * 1.8;
+        const mesh = new THREE.Mesh(rockGeo, moundMat);
+        mesh.name = `TunnelJaw${end}-${side}-${b}`;
+        mesh.position.set(
+          p.x + rx * off + tan.x * outSign * ahead,
+          p.y + radius * 0.12,
+          p.z + rz * off + tan.z * outSign * ahead,
+        );
+        mesh.scale.set(radius, radius * 0.7, radius * 1.15);
+        mesh.rotation.set(0, b * 2.1 + (side > 0 ? 1.1 : 0), 0);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+    }
+  }
+
+  // 洞顶山脊：压扁的巨石，贴着外壳顶面埋进去，不能悬空
+  const outerSurfaceY = (off: number): number => {
+    const pts = INNER_RING.map((_, k) => ringPoint(k, true));
+    if (off <= pts[0]![0]) return pts[0]![1];
+    for (let k = 0; k < pts.length - 1; k++) {
+      const [x0, y0] = pts[k]!;
+      const [x1, y1] = pts[k + 1]!;
+      if (off <= x1) return y0 + (y1 - y0) * ((off - x0) / (x1 - x0));
+    }
+    return pts[pts.length - 1]![1];
+  };
   const topCount = 5;
   for (let k = 0; k < topCount; k++) {
-    const u = 0.1 + (k / (topCount - 1)) * 0.8;
+    // 别放在洞口附近：石头会伸出洞门，看起来像飘在空中
+    const u = 0.2 + (k / (topCount - 1)) * 0.6;
     const r = Math.round(u * (rings - 1));
     const p = path.points[i0 + r]!;
     const tan = path.tangents[i0 + r]!;
     const rx = -tan.z;
     const rz = tan.x;
-    const sx = 10 + (k % 3) * 2.4;
-    const sy = 3.2 + (k % 2) * 0.8;
-    const off = (k - (topCount - 1) / 2) * 4.2;
+    const sx = 8.5 + (k % 3) * 2.0;
+    const sy = 3.0 + (k % 2) * 0.7;
+    const off = (k - (topCount - 1) / 2) * 3.6;
     const mesh = new THREE.Mesh(rockGeo, moundMat);
     mesh.name = `TunnelRidge${k}`;
-    mesh.position.set(p.x + rx * off, p.y + OUTER_TOP + sy * 0.8 + 0.5, p.z + rz * off);
-    mesh.scale.set(sx, sy, sx * 1.25);
+    mesh.position.set(
+      p.x + rx * off,
+      p.y + outerSurfaceY(off) + sy * 0.15,
+      p.z + rz * off,
+    );
+    mesh.scale.set(sx, sy, sx * 1.2);
     mesh.rotation.set(0, k * 1.4, 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -569,7 +734,8 @@ export function createTunnel(path: TrackPath, tStart: number, tEnd: number): Tun
   signGroup.position.copy(entry);
   signGroup.rotation.y = Math.atan2(entryTan.x, entryTan.z);
   const sign = new THREE.Mesh(signGeo, signMat);
-  sign.position.set(0, OUTER_TOP + 2.2, -0.8);
+  // 贴在洞门岩壁上，不要飘在半空（之前挂在山顶上方 2 m，像一块悬空的广告牌）
+  sign.position.set(0, INNER_HEIGHT + 2.6, -0.08);
   sign.rotation.y = Math.PI;
   signGroup.add(sign);
   group.add(signGroup);
