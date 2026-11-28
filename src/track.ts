@@ -79,9 +79,11 @@ export class Track {
       'EmbankmentMain',
       0,
       (this.def.bridgeZones ?? []).map((z) => [z.t0, z.t1] as [number, number]),
+      false,
+      true,
     );
     for (let i = 0; i < this.branches.length; i++) {
-      this.buildEmbankment(this.branches[i]!, `EmbankmentBranch${i}`, -0.02);
+      this.buildEmbankment(this.branches[i]!, `EmbankmentBranch${i}`, -0.02, [], true, false);
     }
 
     // 主路内侧护栏只在支路真正贴过来的地方断开，而不是整段 tStart..tEnd。
@@ -177,6 +179,21 @@ export class Track {
       if (d < best) best = d;
     }
     return best;
+  }
+
+  /**
+   * 世界点是否落在某条支路的可行驶区内（margin 为额外余量）。
+   * 峡谷岩壁 / 路堤 / 桥墩等沿主路生成的装饰必须用这个避让，
+   * 否则会把支路出口堵住（车还能穿过去，看起来就像穿模）。
+   */
+  private nearBranchArea(px: number, pz: number, margin: number): boolean {
+    for (const branch of this.branches) {
+      const i = branch.nearestIndex(px, pz);
+      const p = branch.points[i]!;
+      const d = Math.hypot(px - p.x, pz - p.z);
+      if (d <= branch.halfWidthAt(i) + margin) return true;
+    }
+    return false;
   }
 
   /** 到隧道中心线的最短距离（隧道山体避让） */
@@ -503,6 +520,8 @@ export class Track {
     label: string,
     yOffset: number,
     skipRanges: Array<[number, number]> = [],
+    checkMainClearance = false,
+    checkBranchClearance = false,
   ): void {
     const n = path.count;
     const closed = path.closed;
@@ -555,6 +574,18 @@ export class Track {
         const tMid = (i + 0.5) / segs;
         if (skipRanges.some(([a, b]) => tMid >= a && tMid <= b)) continue;
         const j = (i + 1) % n;
+        const ai = i * cols * 3;
+        const aj = j * cols * 3;
+        const mx = (positions[ai]! + positions[aj]!) * 0.5;
+        const mz = (positions[ai + 2]! + positions[aj + 2]!) * 0.5;
+        // 支路靠主路的一侧：路堤压在主路面上会形成一道土坎，先让开。
+        if (checkMainClearance && this.main.distanceToCenterline(mx, mz) <= this.halfWidth + 1.0) {
+          continue;
+        }
+        // 主路内侧：支路出口处不要铺土坡，否则会把岔路口埋掉。
+        if (checkBranchClearance && side < 0 && this.nearBranchArea(mx, mz, 0.8)) {
+          continue;
+        }
         for (let c = 0; c < cols - 1; c++) {
           const a = i * cols + c;
           const b = i * cols + c + 1;
@@ -1173,6 +1204,9 @@ export class Track {
         const positions = new Float32Array(count * rows * 3);
         const colors = new Float32Array(count * rows * 3);
         const indices: number[] = [];
+        // 支路穿过的位置必须留缺口：岩壁只沿主路生成，不知道支路的存在，
+        // 会把峡谷险道的岔路口堵死（车却能从岩壁里穿过去）。
+        const blocked = new Array<boolean>(count).fill(false);
 
         for (let k = 0; k < count; k++) {
           const i = (i0 + k) % n;
@@ -1181,6 +1215,11 @@ export class Track {
           const hw = this.main.halfWidthAt(i) + 2.2;
           const nx = -tan.z * side;
           const nz = tan.x * side;
+          blocked[k] = this.nearBranchArea(
+            p.x + nx * (hw + 1.3),
+            p.z + nz * (hw + 1.3),
+            4.5,
+          );
 
           // 低频起伏 + 小噪声：像风化的峡谷边缘，而不是一排尖刺
           const wave =
@@ -1202,7 +1241,23 @@ export class Track {
           }
         }
 
+        // 缺口两端把岩壁逐渐降下去，避免留下刀片状的断口。
+        for (let k = 0; k < count; k++) {
+          let gapDist = Infinity;
+          for (let j = 0; j < count; j++) {
+            if (blocked[j]) gapDist = Math.min(gapDist, Math.abs(j - k));
+          }
+          if (!Number.isFinite(gapDist) || gapDist > 8) continue;
+          const f = smoothstep(0, 8, gapDist);
+          const baseY = this.main.points[(i0 + k) % n]!.y - 0.35;
+          for (let r = 1; r < rows; r++) {
+            const yi = (k * rows + r) * 3 + 1;
+            positions[yi] = baseY + (positions[yi]! - baseY) * f;
+          }
+        }
+
         for (let k = 0; k < count - 1; k++) {
+          if (blocked[k] || blocked[k + 1]) continue;
           for (let r = 0; r < rows - 1; r++) {
             const a = k * rows + r;
             const b = a + 1;
@@ -1268,9 +1323,13 @@ export class Track {
         const hw = this.main.halfWidthAt(idx) + 0.9;
         const h = p.y - 0.15;
         for (const side of [-1, 1] as const) {
+          const px = p.x + nx * hw * side;
+          const pz = p.z + nz * hw * side;
+          // 桥墩正好落在支路出口上时直接不生成，否则会挡住岔路。
+          if (this.nearBranchArea(px, pz, 2.5)) continue;
           const pillar = new THREE.Mesh(pillarGeo, concrete);
           pillar.name = 'BridgePillar';
-          pillar.position.set(p.x + nx * hw * side, h * 0.5, p.z + nz * hw * side);
+          pillar.position.set(px, h * 0.5, pz);
           pillar.scale.y = Math.max(0.2, h);
           pillar.castShadow = true;
           pillar.receiveShadow = true;
