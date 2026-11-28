@@ -186,12 +186,24 @@ export class Track {
    * 峡谷岩壁 / 路堤 / 桥墩等沿主路生成的装饰必须用这个避让，
    * 否则会把支路出口堵住（车还能穿过去，看起来就像穿模）。
    */
-  private nearBranchArea(px: number, pz: number, margin: number): boolean {
+  private nearBranchArea(
+    px: number,
+    pz: number,
+    margin: number,
+    exclude?: TrackPath,
+  ): boolean {
     for (const branch of this.branches) {
+      if (branch === exclude) continue;
       const i = branch.nearestIndex(px, pz);
       const p = branch.points[i]!;
       const d = Math.hypot(px - p.x, pz - p.z);
-      if (d <= branch.halfWidthAt(i) + margin) return true;
+      if (d > branch.halfWidthAt(i) + margin) continue;
+      // 端点外不算：支路已经结束，再断护栏就会在岔路口前后多出一个缺口。
+      const tan = branch.tangents[i]!;
+      const along = (px - p.x) * tan.x + (pz - p.z) * tan.z;
+      if (i === 0 && along < 0) continue;
+      if (i === branch.count - 1 && along > 0) continue;
+      return true;
     }
     return false;
   }
@@ -679,18 +691,7 @@ export class Track {
       if (checkBranchClearance) {
         const mx = (ix + jx) * 0.5;
         const mz = (iz + jz) * 0.5;
-        let nearBranch = false;
-        for (const branch of this.branches) {
-          if (branch === path) continue;
-          const bi = branch.nearestIndex(mx, mz);
-          const bp = branch.points[bi]!;
-          const d = Math.hypot(mx - bp.x, mz - bp.z);
-          if (d <= branch.halfWidthAt(bi) + 1.4) {
-            nearBranch = true;
-            break;
-          }
-        }
-        if (nearBranch) continue;
+        if (this.nearBranchArea(mx, mz, 1.4, path)) continue;
       }
 
       const c = Math.floor(i / 8) % 2 === 0 ? red : white;
