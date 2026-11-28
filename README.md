@@ -375,7 +375,15 @@ AI 也会互相超车、避让前车、被撞歪后自己回正；卡在墙上�
 ```bash
 node server/test-room-server.mjs      # 协议与边界，13 项
 node server/test-duplicate-start.mjs  # 重复开始守卫，4 项
+node server/test-ping-pong.mjs        # 延迟测量协议，7 项（自带 8791 临时服务器）
 ```
+
+### 延迟显示（联机时 HUD 名次下方）
+
+- 房主显示 `服务器 xxms`：本机 ↔ 房间服务器的 WebSocket 往返（每秒 ping 一次，指数平滑）
+- 客机显示 `链路 xxms`：本机输入 → 房主 → 本机 的往返（房主把客机输入时间戳随快照原样回显）
+- 颜色：≤120ms 绿、≤250ms 黄、>250ms 红
+- 实测（本机局域网）：房主 `服务器 2ms`，客机 `链路 20~33ms`
 
 ---
 
@@ -423,6 +431,7 @@ kart/
     room-server.mjs ← 房间管理 + 消息中继（ws，端口 8787，路径 /ws）
     test-room-server.mjs ← 房间协议边界测试（13 项）
     test-duplicate-start.mjs ← 重复开始守卫测试
+    test-ping-pong.mjs ← 延迟测量协议测试（7 项）
   scripts/
     track-preview.mjs ← 双赛道 SVG 预览 + 几何验证
     minimap-preview.mjs ← 小地图布局预览
