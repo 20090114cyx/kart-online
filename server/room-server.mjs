@@ -230,6 +230,8 @@ function handleInput(ws, message) {
     id: session.id,
     input: message.input,
     seq: message.seq,
+    // 客机用它算「输入 → 房主 → 本机」往返，房主原样回显到快照里
+    ts: Number(message.ts) || 0,
   });
 }
 
@@ -313,6 +315,12 @@ function handleMessage(ws, raw) {
       }
       handleState(ws, message.state);
       break;
+    case 'ping': {
+      // 原样回显客户端时间戳，客户端据此算 本机 ↔ 服务器 往返
+      const ts = Number(message.ts);
+      send(ws, { t: 'pong', ts: Number.isFinite(ts) && ts >= 0 ? ts : 0 });
+      break;
+    }
     case 'restart':
       handleRestart(ws);
       break;

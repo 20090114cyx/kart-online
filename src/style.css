@@ -394,6 +394,44 @@ body.duo .hud-divider {
   text-shadow: 0 3px 12px rgba(0, 0, 0, 0.85);
 }
 
+/* 联机延迟：只在联机比赛里出现，挂在名次下面 */
+.hud-net {
+  margin-top: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(8, 12, 18, 0.55);
+  font-size: 10px;
+  line-height: 1.35;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+.hud-net[hidden] {
+  display: none;
+}
+
+.hud-net[data-level='good'] {
+  color: #5ee08a;
+  border-color: rgba(94, 224, 138, 0.35);
+}
+
+.hud-net[data-level='ok'] {
+  color: #ffc65c;
+  border-color: rgba(255, 198, 92, 0.35);
+}
+
+.hud-net[data-level='bad'] {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+.hud-net[data-level='unknown'] {
+  color: rgba(255, 255, 255, 0.55);
+}
+
 .rank-pos {
   font-size: 38px;
   font-weight: 800;
@@ -870,6 +908,12 @@ body.touch .stat-best {
 
 body.touch .hud-top-center {
   top: 8px;
+}
+
+body.touch .hud-net {
+  margin-top: 2px;
+  padding: 1px 6px;
+  font-size: 9px;
 }
 
 /* 手机横屏：小地图放到右上角，避开左上角圈速信息和左下油门键 */

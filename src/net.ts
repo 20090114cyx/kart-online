@@ -69,12 +69,15 @@ export interface NetSnapshot {
   countdown: number;
   laps: number;
   karts: NetKartSnapshot[];
+  /** 房主回显的客机输入时间戳（客机用它算 输入→房主→本机 的往返） */
+  echoTs?: number;
 }
 
 type RoomHandler = (room: NetRoomInfo) => void;
 type StartHandler = (msg: NetStart) => void;
-type InputHandler = (id: string, input: NetInput, seq: number) => void;
+type InputHandler = (id: string, input: NetInput, seq: number, ts: number) => void;
 type StateHandler = (snapshot: NetSnapshot) => void;
+type PongHandler = (ts: number) => void;
 type VoidHandler = () => void;
 type MessageHandler = (message: string) => void;
 type CloseHandler = (wasInRoom: boolean) => void;
@@ -90,6 +93,7 @@ export class NetClient {
   onStart: StartHandler | null = null;
   onInput: InputHandler | null = null;
   onState: StateHandler | null = null;
+  onPong: PongHandler | null = null;
   onRestart: VoidHandler | null = null;
   onRequestRestart: VoidHandler | null = null;
   onRoomClosed: MessageHandler | null = null;
@@ -190,8 +194,13 @@ export class NetClient {
     this.send({ t: 'start', trackId });
   }
 
-  sendInput(input: NetInput, seq: number): void {
-    this.send({ t: 'input', input, seq });
+  sendInput(input: NetInput, seq: number, ts = 0): void {
+    this.send({ t: 'input', input, seq, ts });
+  }
+
+  /** 测 本机 ↔ 服务器 往返：服务器原样回显 ts。 */
+  ping(ts: number): void {
+    this.send({ t: 'ping', ts });
   }
 
   sendState(state: NetSnapshot): void {
@@ -254,10 +263,13 @@ export class NetClient {
       case 'input': {
         const input = msg.input as NetInput | undefined;
         if (input) {
-          this.onInput?.(String(msg.id ?? ''), input, Number(msg.seq ?? 0));
+          this.onInput?.(String(msg.id ?? ''), input, Number(msg.seq ?? 0), Number(msg.ts ?? 0));
         }
         break;
       }
+      case 'pong':
+        this.onPong?.(Number(msg.ts ?? 0));
+        break;
       case 'state': {
         const state = msg.state as NetSnapshot | undefined;
         if (state && Array.isArray(state.karts)) this.onState?.(state);

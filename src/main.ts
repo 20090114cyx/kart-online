@@ -329,6 +329,16 @@ let netSendAcc = 0;
 let hostSnapAcc = 0;
 let netSeq = 0;
 let snapshotTick = 0;
+/** 本机 ↔ 房间服务器 的往返（ms，平滑后） */
+let serverRtt = 0;
+/** 客机：本机输入 → 房主 → 回到本机 的往返（ms，平滑后） */
+let linkRtt = 0;
+/** 测服务器往返的累计计时器 */
+let pingAcc = 0;
+/** 房主：最近一次收到的客机输入时间戳，随快照回显 */
+let peerEchoTs = 0;
+/** 延迟数字刷新节流 */
+let netHudAcc = 0;
 /** 物理累积器；提前声明，resetRace 在模块初始化阶段就会调用 */
 let acc = 0;
 let onlineNames = { host: '房主', guest: '玩家' };
@@ -412,6 +422,11 @@ function resetNetReplayState(): void {
   hostSnapAcc = 0;
   netSeq = 0;
   snapshotTick = 0;
+  serverRtt = 0;
+  linkRtt = 0;
+  pingAcc = 0;
+  peerEchoTs = 0;
+  netHudAcc = 0;
   remoteInput.throttle = 0;
   remoteInput.brake = 0;
   remoteInput.steer = 0;
@@ -947,6 +962,30 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : '联机出错';
 }
 
+const hudNetEl = document.getElementById('hudNet');
+
+/**
+ * 联机延迟显示。
+ * 房主显示「本机 ↔ 服务器」，客机显示「本机输入 → 房主 → 本机」（含房主处理与回程）。
+ */
+function updateNetHud(): void {
+  if (!hudNetEl) return;
+  if (!onlineMode || raceState === 'menu') {
+    hudNetEl.hidden = true;
+    return;
+  }
+  hudNetEl.hidden = false;
+  const ms = onlineHost ? serverRtt : linkRtt;
+  const label = onlineHost ? '服务器' : '链路';
+  if (!(ms > 0)) {
+    hudNetEl.textContent = `${label} --`;
+    hudNetEl.dataset.level = 'unknown';
+    return;
+  }
+  hudNetEl.textContent = `${label} ${Math.round(ms)}ms`;
+  hudNetEl.dataset.level = ms <= 120 ? 'good' : ms <= 250 ? 'ok' : 'bad';
+}
+
 // ---------------- 网络事件 ----------------
 net.onRoom = (room) => {
   updateLobbyView();
@@ -970,12 +1009,20 @@ net.onStart = (msg) => {
   beginOnlineRace(msg);
 };
 
-net.onInput = (_id, input) => {
+net.onInput = (_id, input, _seq, ts) => {
   if (!onlineMode || !onlineHost) return;
+  if (ts > 0) peerEchoTs = ts;
   remoteInput.throttle = Math.max(0, Math.min(1, Number(input.throttle) || 0));
   remoteInput.brake = Math.max(0, Math.min(1, Number(input.brake) || 0));
   remoteInput.steer = Math.max(-1, Math.min(1, Number(input.steer) || 0));
   remoteInput.drift = !!input.drift;
+};
+
+net.onPong = (ts) => {
+  if (!(ts > 0)) return;
+  const rtt = performance.now() - ts;
+  if (!(rtt >= 0 && rtt < 10_000)) return;
+  serverRtt = serverRtt === 0 ? rtt : serverRtt * 0.7 + rtt * 0.3;
 };
 
 net.onState = (snapshot) => {
@@ -1407,6 +1454,7 @@ function buildSnapshot(): NetSnapshot {
     state,
     countdown: round2(countdown),
     laps: totalLaps,
+    echoTs: peerEchoTs > 0 ? peerEchoTs : undefined,
     karts: racers.map((r) => {
       const k = r.kart;
       return {
@@ -1441,6 +1489,15 @@ function applySnapshot(snapshot: NetSnapshot): void {
   lastSnapshot = snapshot;
   netBuffer.push({ at: netClock, snap: snapshot });
   if (netBuffer.length > 90) netBuffer.shift();
+
+  // 客机：房主回显了我们的输入时间戳 → 算 输入→房主→回到本机 的往返
+  const echo = Number(snapshot.echoTs ?? 0);
+  if (echo > 0) {
+    const rtt = performance.now() - echo;
+    if (rtt >= 0 && rtt < 3000) {
+      linkRtt = linkRtt === 0 ? rtt : linkRtt * 0.7 + rtt * 0.3;
+    }
+  }
 
   raceState = snapshot.state;
   countdown = snapshot.countdown;
@@ -1768,6 +1825,7 @@ function update(dt: number): void {
 
   // 选图时只渲染静态背景（选图层自带模糊遮罩），比赛逻辑完全冻结
   if (raceState === 'menu') {
+    if (hudNetEl && !hudNetEl.hidden) hudNetEl.hidden = true;
     postfx.render(scene, cam1.camera, { boost: 0, flash: 0, speed: 0 }, dt);
     updateDynamicResolution(dt);
     return;
@@ -2082,6 +2140,12 @@ function update(dt: number): void {
 
   // ---------------- 联机收发 ----------------
   if (onlineMode) {
+    pingAcc += dt;
+    if (pingAcc >= 1) {
+      pingAcc = 0;
+      net.ping(performance.now());
+    }
+
     if (onlineHost) {
       hostSnapAcc += dt;
       if (hostSnapAcc >= 1 / 30) {
@@ -2100,9 +2164,17 @@ function update(dt: number): void {
             drift: input.drift,
           },
           ++netSeq,
+          performance.now(),
         );
       }
     }
+  }
+
+  // ---------------- 延迟显示 ----------------
+  netHudAcc += dt;
+  if (netHudAcc >= 0.2) {
+    netHudAcc = 0;
+    updateNetHud();
   }
 
   // ---------------- HUD ----------------
@@ -2221,6 +2293,7 @@ requestAnimationFrame(frame);
   getLastSnapshot: () => lastSnapshot,
   getRemoteInput: () => ({ ...remoteInput }),
   getNetSeq: () => netSeq,
+  getNetStats: () => ({ serverRtt, linkRtt }),
   getTrackId: () => track.def.id,
   getMenuIndex: () => menuIndex,
   getMode: () => pendingMode,
